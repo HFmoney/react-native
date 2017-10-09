@@ -184,6 +184,18 @@ const ScrollView = createReactClass({
       'white',
     ]),
     /**
+     * This property specifies how the safe area insets are used to modify the
+     * content area of the scroll view. The default value of this property is
+     * "never". Available on iOS 11 and later.
+     * @platform ios
+     */
+    contentInsetAdjustmentBehavior: PropTypes.oneOf([
+      'automatic',
+      'scrollableAxes',
+      'never', // default
+      'always',
+    ]),
+    /**
      * When true, the ScrollView will try to lock to only vertical or horizontal
      * scrolling while dragging.  The default value is false.
      * @platform ios
