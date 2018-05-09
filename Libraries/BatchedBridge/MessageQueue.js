@@ -1,12 +1,9 @@
 /**
  * Copyright (c) 2015-present, Facebook, Inc.
- * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
  *
- * @providesModule MessageQueue
  * @flow
  * @format
  */
@@ -46,8 +43,8 @@ let JSTimers = null;
 class MessageQueue {
   _lazyCallableModules: {[key: string]: (void) => Object};
   _queue: [number[], number[], any[], number];
-  _successCallbacks: (?Function)[];
-  _failureCallbacks: (?Function)[];
+  _successCallbacks: {[key: number]: ?Function};
+  _failureCallbacks: {[key: number]: ?Function};
   _callID: number;
   _inCall: number;
   _lastFlush: number;
@@ -59,21 +56,14 @@ class MessageQueue {
 
   __spy: ?(data: SpyData) => void;
 
-  __guard: (() => void) => void;
-
-  constructor(shouldUninstallGlobalErrorHandler: boolean = false) {
+  constructor() {
     this._lazyCallableModules = {};
     this._queue = [[], [], [], 0];
-    this._successCallbacks = [];
-    this._failureCallbacks = [];
+    this._successCallbacks = {};
+    this._failureCallbacks = {};
     this._callID = 0;
     this._lastFlush = 0;
     this._eventLoopStartTime = new Date().getTime();
-    if (shouldUninstallGlobalErrorHandler) {
-      this.uninstallGlobalErrorHandler();
-    } else {
-      this.installGlobalErrorHandler();
-    }
 
     if (__DEV__) {
       this._debugInfo = {};
@@ -215,8 +205,40 @@ class MessageQueue {
     this._queue[METHOD_IDS].push(methodID);
 
     if (__DEV__) {
-      // Any params sent over the bridge should be encodable as JSON
-      JSON.stringify(params);
+      // Validate that parameters passed over the bridge are
+      // folly-convertible.  As a special case, if a prop value is a
+      // function it is permitted here, and special-cased in the
+      // conversion.
+      const isValidArgument = val => {
+        const t = typeof val;
+        if (
+          t === 'undefined' ||
+          t === 'null' ||
+          t === 'boolean' ||
+          t === 'number' ||
+          t === 'string'
+        ) {
+          return true;
+        }
+        if (t === 'function' || t !== 'object') {
+          return false;
+        }
+        if (Array.isArray(val)) {
+          return val.every(isValidArgument);
+        }
+        for (const k in val) {
+          if (typeof val[k] !== 'function' && !isValidArgument(val[k])) {
+            return false;
+          }
+        }
+        return true;
+      };
+
+      invariant(
+        isValidArgument(params),
+        '%s is not usable as a native method argument',
+        params,
+      );
 
       // The params object should not be mutated after being queued
       deepFreezeAndThrowOnMutationInDev((params: any));
@@ -259,34 +281,39 @@ class MessageQueue {
     }
   }
 
-  uninstallGlobalErrorHandler() {
-    this.__guard = this.__guardUnsafe;
-  }
-
-  installGlobalErrorHandler() {
-    this.__guard = this.__guardSafe;
-  }
-
   /**
    * Private methods
    */
 
-  // Lets exceptions propagate to be handled by the VM at the origin
-  __guardUnsafe(fn: () => void) {
+  __guard(fn: () => void) {
     this._inCall++;
-    fn();
+    if (this.__shouldPauseOnThrow()) {
+      fn();
+    } else {
+      try {
+        fn();
+      } catch (error) {
+        ErrorUtils.reportFatalError(error);
+      }
+    }
     this._inCall--;
   }
 
-  __guardSafe(fn: () => void) {
-    this._inCall++;
-    try {
-      fn();
-    } catch (error) {
-      ErrorUtils.reportFatalError(error);
-    } finally {
-      this._inCall--;
-    }
+  // MessageQueue installs a global handler to catch all exceptions where JS users can register their own behavior
+  // This handler makes all exceptions to be propagated from inside MessageQueue rather than by the VM at their origin
+  // This makes stacktraces to be placed at MessageQueue rather than at where they were launched
+  // The parameter DebuggerInternal.shouldPauseOnThrow is used to check before catching all exceptions and
+  // can be configured by the VM or any Inspector
+  __shouldPauseOnThrow() {
+    return (
+      // $FlowFixMe
+      (typeof DebuggerInternal !== 'undefined' &&
+        DebuggerInternal.shouldPauseOnThrow === true) || // eslint-disable-line no-undef
+      // FIXME(festevezga) Remove once T24034309 is rolled out internally
+      // $FlowFixMe
+      (typeof __fbUninstallRNGlobalErrorHandler !== 'undefined' &&
+        __fbUninstallRNGlobalErrorHandler === true) // eslint-disable-line no-undef
+    );
   }
 
   __callImmediates() {
@@ -301,7 +328,11 @@ class MessageQueue {
   __callFunction(module: string, method: string, args: any[]): any {
     this._lastFlush = new Date().getTime();
     this._eventLoopStartTime = this._lastFlush;
-    Systrace.beginEvent(`${module}.${method}()`);
+    if (__DEV__ || this.__spy) {
+      Systrace.beginEvent(`${module}.${method}(${stringifySafe(args)})`);
+    } else {
+      Systrace.beginEvent(`${module}.${method}(...)`);
+    }
     if (this.__spy) {
       this.__spy({type: TO_JS, module, method, args});
     }
@@ -364,7 +395,8 @@ class MessageQueue {
       return;
     }
 
-    this._successCallbacks[callID] = this._failureCallbacks[callID] = null;
+    delete this._successCallbacks[callID];
+    delete this._failureCallbacks[callID];
     callback(...args);
 
     if (__DEV__) {

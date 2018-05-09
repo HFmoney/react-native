@@ -1,10 +1,8 @@
 /**
  * Copyright (c) 2015-present, Facebook, Inc.
- * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
  */
 
 package com.facebook.react;
@@ -48,10 +46,11 @@ import com.facebook.infer.annotation.ThreadSafe;
 import com.facebook.react.bridge.CatalystInstance;
 import com.facebook.react.bridge.CatalystInstanceImpl;
 import com.facebook.react.bridge.JSBundleLoader;
+import com.facebook.react.bridge.JSIModulesProvider;
 import com.facebook.react.bridge.JavaJSExecutor;
 import com.facebook.react.bridge.JavaScriptExecutor;
 import com.facebook.react.bridge.JavaScriptExecutorFactory;
-import com.facebook.react.bridge.NativeArray;
+import com.facebook.react.bridge.NativeDeltaClient;
 import com.facebook.react.bridge.NativeModuleCallExceptionHandler;
 import com.facebook.react.bridge.NativeModuleRegistry;
 import com.facebook.react.bridge.NotThreadSafeBridgeIdleDebugListener;
@@ -60,6 +59,7 @@ import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContext;
 import com.facebook.react.bridge.ReactMarker;
 import com.facebook.react.bridge.ReactMarkerConstants;
+import com.facebook.react.bridge.UIManager;
 import com.facebook.react.bridge.UiThreadUtil;
 import com.facebook.react.bridge.queue.ReactQueueConfigurationSpec;
 import com.facebook.react.common.LifecycleState;
@@ -76,6 +76,7 @@ import com.facebook.react.modules.core.DefaultHardwareBackBtnHandler;
 import com.facebook.react.modules.core.DeviceEventManagerModule;
 import com.facebook.react.modules.core.ReactChoreographer;
 import com.facebook.react.modules.debug.interfaces.DeveloperSettings;
+import com.facebook.react.modules.fabric.ReactFabric;
 import com.facebook.react.uimanager.DisplayMetricsHolder;
 import com.facebook.react.uimanager.UIImplementationProvider;
 import com.facebook.react.uimanager.UIManagerModule;
@@ -84,6 +85,7 @@ import com.facebook.react.views.imagehelper.ResourceDrawableIdHelper;
 import com.facebook.soloader.SoLoader;
 import com.facebook.systrace.Systrace;
 import com.facebook.systrace.SystraceMessage;
+
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -124,6 +126,7 @@ public class ReactInstanceManager {
      */
     void onReactContextInitialized(ReactContext context);
   }
+
   private final List<ReactRootView> mAttachedRootViews = Collections.synchronizedList(
     new ArrayList<ReactRootView>());
 
@@ -137,7 +140,6 @@ public class ReactInstanceManager {
   private final @Nullable JSBundleLoader mBundleLoader;
   private final @Nullable String mJSMainModulePath; /* path to JS bundle root on packager server */
   private final List<ReactPackage> mPackages;
-  private final List<CatalystInstanceImpl.PendingJSCall> mInitFunctions;
   private final DevSupportManager mDevSupportManager;
   private final boolean mUseDeveloperSupport;
   private final @Nullable NotThreadSafeBridgeIdleDebugListener mBridgeIdleDebugListener;
@@ -156,7 +158,8 @@ public class ReactInstanceManager {
   private final MemoryPressureRouter mMemoryPressureRouter;
   private final @Nullable NativeModuleCallExceptionHandler mNativeModuleCallExceptionHandler;
   private final boolean mLazyNativeModulesEnabled;
-  private final boolean mDelayViewManagerClassLoadsEnabled;
+  private final @Nullable JSIModulesProvider mJSIModulesProvider;
+  private List<ViewManager> mViewManagers;
 
   private class ReactContextInitParams {
     private final JavaScriptExecutorFactory mJsExecutorFactory;
@@ -186,25 +189,25 @@ public class ReactInstanceManager {
   }
 
   /* package */ ReactInstanceManager(
-      Context applicationContext,
-      @Nullable Activity currentActivity,
-      @Nullable DefaultHardwareBackBtnHandler defaultHardwareBackBtnHandler,
-      JavaScriptExecutorFactory javaScriptExecutorFactory,
-      @Nullable JSBundleLoader bundleLoader,
-      @Nullable String jsMainModulePath,
-      List<ReactPackage> packages,
-      boolean useDeveloperSupport,
-      @Nullable NotThreadSafeBridgeIdleDebugListener bridgeIdleDebugListener,
-      LifecycleState initialLifecycleState,
-      UIImplementationProvider uiImplementationProvider,
-      NativeModuleCallExceptionHandler nativeModuleCallExceptionHandler,
-      @Nullable RedBoxHandler redBoxHandler,
-      boolean lazyNativeModulesEnabled,
-      boolean lazyViewManagersEnabled,
-      boolean delayViewManagerClassLoadsEnabled,
-      @Nullable DevBundleDownloadListener devBundleDownloadListener,
-      int minNumShakes,
-      int minTimeLeftInFrameForNonBatchedOperationMs) {
+    Context applicationContext,
+    @Nullable Activity currentActivity,
+    @Nullable DefaultHardwareBackBtnHandler defaultHardwareBackBtnHandler,
+    JavaScriptExecutorFactory javaScriptExecutorFactory,
+    @Nullable JSBundleLoader bundleLoader,
+    @Nullable String jsMainModulePath,
+    List<ReactPackage> packages,
+    boolean useDeveloperSupport,
+    @Nullable NotThreadSafeBridgeIdleDebugListener bridgeIdleDebugListener,
+    LifecycleState initialLifecycleState,
+    UIImplementationProvider uiImplementationProvider,
+    NativeModuleCallExceptionHandler nativeModuleCallExceptionHandler,
+    @Nullable RedBoxHandler redBoxHandler,
+    boolean lazyNativeModulesEnabled,
+    boolean lazyViewManagersEnabled,
+    @Nullable DevBundleDownloadListener devBundleDownloadListener,
+    int minNumShakes,
+    int minTimeLeftInFrameForNonBatchedOperationMs,
+    @Nullable JSIModulesProvider jsiModulesProvider) {
     Log.d(ReactConstants.TAG, "ReactInstanceManager.ctor()");
     initializeSoLoaderIfNecessary(applicationContext);
 
@@ -217,7 +220,6 @@ public class ReactInstanceManager {
     mBundleLoader = bundleLoader;
     mJSMainModulePath = jsMainModulePath;
     mPackages = new ArrayList<>();
-    mInitFunctions = new ArrayList<>();
     mUseDeveloperSupport = useDeveloperSupport;
     mDevSupportManager =
         DevSupportManagerFactory.create(
@@ -233,7 +235,6 @@ public class ReactInstanceManager {
     mMemoryPressureRouter = new MemoryPressureRouter(applicationContext);
     mNativeModuleCallExceptionHandler = nativeModuleCallExceptionHandler;
     mLazyNativeModulesEnabled = lazyNativeModulesEnabled;
-    mDelayViewManagerClassLoadsEnabled = delayViewManagerClassLoadsEnabled;
     synchronized (mPackages) {
       PrinterHolder.getPrinter()
           .logMessage(ReactDebugOverlayTags.RN_CORE, "RNCore: Use Split Packages");
@@ -254,6 +255,7 @@ public class ReactInstanceManager {
       }
       mPackages.addAll(packages);
     }
+    mJSIModulesProvider = jsiModulesProvider;
 
     // Instantiate ReactChoreographer in UI thread.
     ReactChoreographer.initialize();
@@ -270,8 +272,8 @@ public class ReactInstanceManager {
       }
 
       @Override
-      public void onJSBundleLoadedFromServer() {
-        ReactInstanceManager.this.onJSBundleLoadedFromServer();
+      public void onJSBundleLoadedFromServer(@Nullable NativeDeltaClient nativeDeltaClient) {
+        ReactInstanceManager.this.onJSBundleLoadedFromServer(nativeDeltaClient);
       }
 
       @Override
@@ -327,57 +329,6 @@ public class ReactInstanceManager {
     recreateReactContextInBackgroundInner();
   }
 
-  @ThreadConfined(UI)
-  public void registerAdditionalPackages(List<ReactPackage> packages) {
-    if (packages == null || packages.isEmpty()) {
-      return;
-    }
-
-    // CatalystInstance hasn't been created, so add packages for later evaluation
-    if (!hasStartedCreatingInitialContext()) {
-      synchronized (mPackages) {
-        for (ReactPackage p : packages) {
-          if (!mPackages.contains(p)) {
-            mPackages.add(p);
-          }
-        }
-      }
-      return;
-    }
-
-    ReactContext context = getCurrentReactContext();
-    CatalystInstance catalystInstance = context != null ? context.getCatalystInstance() : null;
-
-    Assertions.assertNotNull(catalystInstance, "CatalystInstance null after hasStartedCreatingInitialContext true.");
-
-    final ReactApplicationContext reactContext = new ReactApplicationContext(mApplicationContext);
-
-    NativeModuleRegistry nativeModuleRegistry = processPackages(reactContext, packages, true);
-    catalystInstance.extendNativeModules(nativeModuleRegistry);
-  }
-
-  /**
-   * If the JavaScript bundle for this app requires initialization as part of bridge start up,
-   * register a function using its @param module and @param method and optional arguments.
-   */
-  public void registerInitFunction(String module, String method, @Nullable NativeArray arguments) {
-    CatalystInstanceImpl.PendingJSCall init =
-        new CatalystInstanceImpl.PendingJSCall(module, method, arguments);
-    synchronized (this) {
-      mInitFunctions.add(init);
-    }
-    ReactContext context = getCurrentReactContext();
-    CatalystInstance catalystInstance = context == null ? null : context.getCatalystInstance();
-    if (catalystInstance == null) {
-      return;
-    } else {
-      // CatalystInstance is only visible after running jsBundle, so these will be put on the native
-      // JS queue
-      // TODO T20546472 remove cast when catalystInstance and InstanceImpl are renamed/merged
-      ((CatalystInstanceImpl) catalystInstance).callFunction(init);
-    }
-  }
-
   /**
    * Recreate the react application and context. This should be called if configuration has changed
    * or the developer has requested the app to be reloaded. It should only be called after an
@@ -411,7 +362,7 @@ public class ReactInstanceManager {
           !devSettings.isRemoteJSDebugEnabled()) {
         // If there is a up-to-date bundle downloaded from server,
         // with remote JS debugging disabled, always use that.
-        onJSBundleLoadedFromServer();
+        onJSBundleLoadedFromServer(null);
       } else if (mBundleLoader == null) {
         mDevSupportManager.handleReloadJS();
       } else {
@@ -569,6 +520,16 @@ public class ReactInstanceManager {
     UiThreadUtil.assertOnUiThread();
 
     mDefaultBackButtonImpl = defaultBackButtonImpl;
+    onHostResume(activity);
+  }
+
+  /**
+   * Use this method when the activity resumes.
+   */
+  @ThreadConfined(UI)
+  public void onHostResume(Activity activity) {
+    UiThreadUtil.assertOnUiThread();
+
     mCurrentActivity = activity;
 
     if (mUseDeveloperSupport) {
@@ -781,18 +742,23 @@ public class ReactInstanceManager {
   /**
    * Uses configured {@link ReactPackage} instances to create all view managers.
    */
-  public List<ViewManager> createAllViewManagers(
+  public List<ViewManager> getOrCreateViewManagers(
       ReactApplicationContext catalystApplicationContext) {
     ReactMarker.logMarker(CREATE_VIEW_MANAGERS_START);
     Systrace.beginSection(TRACE_TAG_REACT_JAVA_BRIDGE, "createAllViewManagers");
     try {
-      synchronized (mPackages) {
-        List<ViewManager> allViewManagers = new ArrayList<>();
-        for (ReactPackage reactPackage : mPackages) {
-          allViewManagers.addAll(reactPackage.createViewManagers(catalystApplicationContext));
+      if (mViewManagers == null) {
+        synchronized (mPackages) {
+          if (mViewManagers == null) {
+            mViewManagers = new ArrayList<>();
+            for (ReactPackage reactPackage : mPackages) {
+              mViewManagers.addAll(reactPackage.createViewManagers(catalystApplicationContext));
+            }
+            return mViewManagers;
+          }
         }
-        return allViewManagers;
       }
+      return mViewManagers;
     } finally {
       Systrace.endSection(TRACE_TAG_REACT_JAVA_BRIDGE);
       ReactMarker.logMarker(CREATE_VIEW_MANAGERS_END);
@@ -813,7 +779,7 @@ public class ReactInstanceManager {
         if (reactPackage instanceof ViewManagerOnDemandReactPackage) {
           ViewManager viewManager =
               ((ViewManagerOnDemandReactPackage) reactPackage)
-                  .createViewManager(context, viewManagerName, !mDelayViewManagerClassLoadsEnabled);
+                  .createViewManager(context, viewManagerName);
           if (viewManager != null) {
             return viewManager;
           }
@@ -838,7 +804,7 @@ public class ReactInstanceManager {
         if (reactPackage instanceof ViewManagerOnDemandReactPackage) {
           List<String> names =
               ((ViewManagerOnDemandReactPackage) reactPackage)
-                  .getViewManagerNames(context, !mDelayViewManagerClassLoadsEnabled);
+                  .getViewManagerNames(context);
           if (names != null) {
             uniqueNames.addAll(names);
           }
@@ -884,12 +850,17 @@ public class ReactInstanceManager {
   }
 
   @ThreadConfined(UI)
-  private void onJSBundleLoadedFromServer() {
+  private void onJSBundleLoadedFromServer(@Nullable NativeDeltaClient nativeDeltaClient) {
     Log.d(ReactConstants.TAG, "ReactInstanceManager.onJSBundleLoadedFromServer()");
-    recreateReactContextInBackground(
-        mJavaScriptExecutorFactory,
-        JSBundleLoader.createCachedBundleFromNetworkLoader(
-            mDevSupportManager.getSourceUrl(), mDevSupportManager.getDownloadedJSBundleFile()));
+
+    JSBundleLoader bundleLoader = nativeDeltaClient == null
+        ? JSBundleLoader.createCachedBundleFromNetworkLoader(
+            mDevSupportManager.getSourceUrl(),
+            mDevSupportManager.getDownloadedJSBundleFile())
+        : JSBundleLoader.createDeltaFromNetworkLoader(
+            mDevSupportManager.getSourceUrl(), nativeDeltaClient);
+
+    recreateReactContextInBackground(mJavaScriptExecutorFactory, bundleLoader);
   }
 
   @ThreadConfined(UI)
@@ -1041,10 +1012,10 @@ public class ReactInstanceManager {
       CatalystInstance catalystInstance) {
     Log.d(ReactConstants.TAG, "ReactInstanceManager.attachRootViewToInstance()");
     Systrace.beginSection(TRACE_TAG_REACT_JAVA_BRIDGE, "attachRootViewToInstance");
-    UIManagerModule uiManagerModule = catalystInstance.getNativeModule(UIManagerModule.class);
+    UIManager uiManagerModule = rootView.isFabric() ? catalystInstance.getJSIModule(UIManager.class) : catalystInstance.getNativeModule(UIManagerModule.class);
     final int rootTag = uiManagerModule.addRootView(rootView);
     rootView.setRootViewTag(rootTag);
-    rootView.runApplication();
+    rootView.invokeJSEntryPoint();
     Systrace.beginAsyncSection(
       TRACE_TAG_REACT_JAVA_BRIDGE,
       "pre_rootView.onAttachedToReactInstance",
@@ -1067,8 +1038,14 @@ public class ReactInstanceManager {
       CatalystInstance catalystInstance) {
     Log.d(ReactConstants.TAG, "ReactInstanceManager.detachViewFromInstance()");
     UiThreadUtil.assertOnUiThread();
-    catalystInstance.getJSModule(AppRegistry.class)
+    if (rootView.isFabric()) {
+      catalystInstance.getJSModule(ReactFabric.class)
+        .unmountComponentAtNode(rootView.getId());
+    } else {
+      catalystInstance.getJSModule(AppRegistry.class)
         .unmountApplicationComponentAtRootTag(rootView.getId());
+    }
+
   }
 
   private void tearDownReactContext(ReactContext reactContext) {
@@ -1097,18 +1074,16 @@ public class ReactInstanceManager {
       JavaScriptExecutor jsExecutor,
       JSBundleLoader jsBundleLoader) {
     Log.d(ReactConstants.TAG, "ReactInstanceManager.createReactContext()");
-    ReactMarker.logMarker(CREATE_REACT_CONTEXT_START);
+    ReactMarker.logMarker(CREATE_REACT_CONTEXT_START, jsExecutor.getName());
     final ReactApplicationContext reactContext = new ReactApplicationContext(mApplicationContext);
 
-    if (mUseDeveloperSupport) {
-      reactContext.setNativeModuleCallExceptionHandler(mDevSupportManager);
-    }
+    NativeModuleCallExceptionHandler exceptionHandler = mNativeModuleCallExceptionHandler != null
+        ? mNativeModuleCallExceptionHandler
+        : mDevSupportManager;
+    reactContext.setNativeModuleCallExceptionHandler(exceptionHandler);
 
     NativeModuleRegistry nativeModuleRegistry = processPackages(reactContext, mPackages, false);
 
-    NativeModuleCallExceptionHandler exceptionHandler = mNativeModuleCallExceptionHandler != null
-      ? mNativeModuleCallExceptionHandler
-      : mDevSupportManager;
     CatalystInstanceImpl.Builder catalystInstanceBuilder = new CatalystInstanceImpl.Builder()
       .setReactQueueConfigurationSpec(ReactQueueConfigurationSpec.createDefault())
       .setJSExecutor(jsExecutor)
@@ -1126,6 +1101,10 @@ public class ReactInstanceManager {
       Systrace.endSection(TRACE_TAG_REACT_JAVA_BRIDGE);
       ReactMarker.logMarker(CREATE_CATALYST_INSTANCE_END);
     }
+    if (mJSIModulesProvider != null) {
+      catalystInstance.addJSIModules(mJSIModulesProvider
+        .getJSIModules(reactContext, catalystInstance.getJavaScriptContextHolder()));
+    }
 
     if (mBridgeIdleDebugListener != null) {
       catalystInstance.addBridgeIdleDebugListener(mBridgeIdleDebugListener);
@@ -1135,13 +1114,6 @@ public class ReactInstanceManager {
     }
     ReactMarker.logMarker(ReactMarkerConstants.PRE_RUN_JS_BUNDLE_START);
     catalystInstance.runJSBundle();
-    // Transitions functions in the minitFunctions list to catalystInstance, to run after the bundle
-    // TODO T20546472
-    if (!mInitFunctions.isEmpty()) {
-      for (CatalystInstanceImpl.PendingJSCall function : mInitFunctions) {
-        ((CatalystInstanceImpl) catalystInstance).callFunction(function);
-      }
-    }
     reactContext.initializeWithInstance(catalystInstance);
 
     return reactContext;

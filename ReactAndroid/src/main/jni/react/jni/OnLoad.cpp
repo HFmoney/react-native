@@ -16,6 +16,7 @@
 #include "CxxModuleWrapper.h"
 #include "JavaScriptExecutorHolder.h"
 #include "JCallback.h"
+#include "NativeDeltaClient.h"
 #include "ProxyExecutor.h"
 #include "WritableNativeArray.h"
 #include "WritableNativeMap.h"
@@ -38,7 +39,7 @@ class JSCJavaScriptExecutorHolder : public HybridClass<JSCJavaScriptExecutorHold
   static constexpr auto kJavaDescriptor = "Lcom/facebook/react/bridge/JSCJavaScriptExecutor;";
 
   static local_ref<jhybriddata> initHybrid(alias_ref<jclass>, ReadableNativeMap* jscConfig) {
-    return makeCxxInstance(makeAndroidJSCExecutorFactory(jscConfig->consume()));
+    return makeCxxInstance(makeAndroidJSCExecutorFactory(jscConfig->consume(), nullptr));
   }
 
   static void registerNatives() {
@@ -91,6 +92,7 @@ extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void* reserved) {
     CxxModuleWrapper::registerNatives();
     JCxxCallbackImpl::registerNatives();
     NativeArray::registerNatives();
+    NativeDeltaClient::registerNatives();
     ReadableNativeArray::registerNatives();
     WritableNativeArray::registerNatives();
     NativeMap::registerNatives();

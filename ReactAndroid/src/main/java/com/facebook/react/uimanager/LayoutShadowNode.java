@@ -37,6 +37,13 @@ public class LayoutShadowNode extends ReactShadowNodeImpl {
     float value;
     YogaUnit unit;
 
+    private MutableYogaValue() { }
+
+    private MutableYogaValue(MutableYogaValue mutableYogaValue) {
+      this.value = mutableYogaValue.value;
+      this.unit = mutableYogaValue.unit;
+    }
+
     void setFromDynamic(Dynamic dynamic) {
       if (dynamic.isNull()) {
         unit = YogaUnit.UNDEFINED;
@@ -59,7 +66,21 @@ public class LayoutShadowNode extends ReactShadowNodeImpl {
     }
   }
 
-  private final MutableYogaValue mTempYogaValue = new MutableYogaValue();
+  private final MutableYogaValue mTempYogaValue;
+
+  public LayoutShadowNode() {
+    mTempYogaValue = new MutableYogaValue();
+  }
+
+  protected LayoutShadowNode(LayoutShadowNode node) {
+    super(node);
+    mTempYogaValue = new MutableYogaValue(node.mTempYogaValue);
+  }
+
+  @Override
+  protected LayoutShadowNode copy() {
+    return new LayoutShadowNode(this);
+  }
 
   @ReactProp(name = ViewProps.WIDTH)
   public void setWidth(Dynamic width) {
@@ -294,6 +315,10 @@ public class LayoutShadowNode extends ReactShadowNodeImpl {
         setFlexWrap(YogaWrap.WRAP);
         break;
       }
+      case "wrap-reverse": {
+        setFlexWrap(YogaWrap.WRAP_REVERSE);
+        break;
+      }
       default: {
         throw new JSApplicationIllegalArgumentException(
             "invalid value for flexWrap: " + flexWrap);
@@ -486,6 +511,10 @@ public class LayoutShadowNode extends ReactShadowNodeImpl {
         setJustifyContent(YogaJustify.SPACE_AROUND);
         break;
       }
+      case "space-evenly": {
+        setJustifyContent(YogaJustify.SPACE_EVENLY);
+        break;
+      }
       default: {
         throw new JSApplicationIllegalArgumentException(
             "invalid value for justifyContent: " + justifyContent);
@@ -498,7 +527,6 @@ public class LayoutShadowNode extends ReactShadowNodeImpl {
     if (isVirtual()) {
       return;
     }
-
     if (overflow == null) {
       setOverflow(YogaOverflow.VISIBLE);
       return;

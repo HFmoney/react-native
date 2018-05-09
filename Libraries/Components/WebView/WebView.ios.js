@@ -1,41 +1,40 @@
 /**
  * Copyright (c) 2015-present, Facebook, Inc.
- * All rights reserved.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
  *
- * @providesModule WebView
  * @noflow
  */
 'use strict';
 
-var ActivityIndicator = require('ActivityIndicator');
-var EdgeInsetsPropType = require('EdgeInsetsPropType');
-var React = require('React');
-var PropTypes = require('prop-types');
-var ReactNative = require('ReactNative');
-var StyleSheet = require('StyleSheet');
-var Text = require('Text');
-var UIManager = require('UIManager');
-var View = require('View');
-var ViewPropTypes = require('ViewPropTypes');
-var ScrollView = require('ScrollView');
+const ActivityIndicator = require('ActivityIndicator');
+const EdgeInsetsPropType = require('EdgeInsetsPropType');
+const Linking = require('Linking');
+const PropTypes = require('prop-types');
+const React = require('React');
+const ReactNative = require('ReactNative');
+const ScrollView = require('ScrollView');
+const StyleSheet = require('StyleSheet');
+const Text = require('Text');
+const UIManager = require('UIManager');
+const View = require('View');
+const ViewPropTypes = require('ViewPropTypes');
+const WebViewShared = require('WebViewShared');
 
-var deprecatedPropType = require('deprecatedPropType');
-var invariant = require('fbjs/lib/invariant');
-var keyMirror = require('fbjs/lib/keyMirror');
-var processDecelerationRate = require('processDecelerationRate');
-var requireNativeComponent = require('requireNativeComponent');
-var resolveAssetSource = require('resolveAssetSource');
+const deprecatedPropType = require('deprecatedPropType');
+const invariant = require('fbjs/lib/invariant');
+const keyMirror = require('fbjs/lib/keyMirror');
+const processDecelerationRate = require('processDecelerationRate');
+const requireNativeComponent = require('requireNativeComponent');
+const resolveAssetSource = require('resolveAssetSource');
 
-var RCTWebViewManager = require('NativeModules').WebViewManager;
+const RCTWebViewManager = require('NativeModules').WebViewManager;
 
-var BGWASH = 'rgba(255,255,255,0.8)';
-var RCT_WEBVIEW_REF = 'webview';
+const BGWASH = 'rgba(255,255,255,0.8)';
+const RCT_WEBVIEW_REF = 'webview';
 
-var WebViewState = keyMirror({
+const WebViewState = keyMirror({
   IDLE: null,
   LOADING: null,
   ERROR: null,
@@ -69,12 +68,12 @@ const DataDetectorTypes = [
   'all',
 ];
 
-var defaultRenderLoading = () => (
+const defaultRenderLoading = () => (
   <View style={styles.loadingView}>
     <ActivityIndicator />
   </View>
 );
-var defaultRenderError = (errorDomain, errorCode, errorDesc) => (
+const defaultRenderError = (errorDomain, errorCode, errorDesc) => (
   <View style={styles.errorContainer}>
     <Text style={styles.errorTextTitle}>
       Error loading page
@@ -357,6 +356,15 @@ class WebView extends React.Component {
     mediaPlaybackRequiresUserAction: PropTypes.bool,
 
     /**
+     * List of origin strings to allow being navigated to. The strings allow
+     * wildcards and get matched against *just* the origin (not the full URL).
+     * If the user taps to navigate to a new page but the new page is not in
+     * this whitelist, we will open the URL in Safari.
+     * The default whitelisted origins are "http://*" and "https://*".
+     */
+    originWhitelist: PropTypes.arrayOf(PropTypes.string),
+
+    /**
      * Function that accepts a string that will be passed to the WebView and
      * executed immediately as JavaScript.
      */
@@ -401,6 +409,7 @@ class WebView extends React.Component {
   };
 
   static defaultProps = {
+    originWhitelist: WebViewShared.defaultOriginWhitelist,
     scalesPageToFit: true,
   };
 
@@ -410,19 +419,19 @@ class WebView extends React.Component {
     startInLoadingState: true,
   };
 
-  componentWillMount() {
+  UNSAFE_componentWillMount() {
     if (this.props.startInLoadingState) {
       this.setState({viewState: WebViewState.LOADING});
     }
   }
 
   render() {
-    var otherView = null;
+    let otherView = null;
 
     if (this.state.viewState === WebViewState.LOADING) {
       otherView = (this.props.renderLoading || defaultRenderLoading)();
     } else if (this.state.viewState === WebViewState.ERROR) {
-      var errorEvent = this.state.lastErrorEvent;
+      const errorEvent = this.state.lastErrorEvent;
       invariant(
         errorEvent != null,
         'lastErrorEvent expected to be non-null'
@@ -438,7 +447,7 @@ class WebView extends React.Component {
       );
     }
 
-    var webViewStyles = [styles.container, styles.webView, this.props.style];
+    const webViewStyles = [styles.container, styles.webView, this.props.style];
     if (this.state.viewState === WebViewState.LOADING ||
       this.state.viewState === WebViewState.ERROR) {
       // if we're in either LOADING or ERROR states, don't show the webView
@@ -449,15 +458,25 @@ class WebView extends React.Component {
 
     const viewManager = nativeConfig.viewManager || RCTWebViewManager;
 
-    var onShouldStartLoadWithRequest = this.props.onShouldStartLoadWithRequest && ((event: Event) => {
-      var shouldStart = this.props.onShouldStartLoadWithRequest &&
-        this.props.onShouldStartLoadWithRequest(event.nativeEvent);
+    const compiledWhitelist = (this.props.originWhitelist || []).map(WebViewShared.originWhitelistToRegex);
+    const onShouldStartLoadWithRequest = ((event: Event) => {
+      let shouldStart = true;
+      const {url} = event.nativeEvent;
+      const origin = WebViewShared.extractOrigin(url);
+      const passesWhitelist = compiledWhitelist.some(x => new RegExp(x).test(origin));
+      shouldStart = shouldStart && passesWhitelist;
+      if (!passesWhitelist) {
+        Linking.openURL(url);
+      }
+      if (this.props.onShouldStartLoadWithRequest) {
+        shouldStart = shouldStart && this.props.onShouldStartLoadWithRequest(event.nativeEvent);
+      }
       viewManager.startLoadWithResult(!!shouldStart, event.nativeEvent.lockIdentifier);
     });
 
-    var decelerationRate = processDecelerationRate(this.props.decelerationRate);
+    const decelerationRate = processDecelerationRate(this.props.decelerationRate);
 
-    var source = this.props.source || {};
+    const source = this.props.source || {};
     if (this.props.html) {
       source.html = this.props.html;
     } else if (this.props.url) {
@@ -468,7 +487,7 @@ class WebView extends React.Component {
 
     const NativeWebView = nativeConfig.component || RCTWebView;
 
-    var webView =
+    const webView =
       <NativeWebView
         ref={RCT_WEBVIEW_REF}
         key="webViewKey"
@@ -596,14 +615,14 @@ class WebView extends React.Component {
   };
 
   _onLoadingStart = (event: Event) => {
-    var onLoadStart = this.props.onLoadStart;
+    const onLoadStart = this.props.onLoadStart;
     onLoadStart && onLoadStart(event);
     this._updateNavigationState(event);
   };
 
   _onLoadingError = (event: Event) => {
     event.persist(); // persist this event because we need to store it
-    var {onError, onLoadEnd} = this.props;
+    const {onError, onLoadEnd} = this.props;
     onError && onError(event);
     onLoadEnd && onLoadEnd(event);
     console.warn('Encountered an error loading page', event.nativeEvent);
@@ -615,7 +634,7 @@ class WebView extends React.Component {
   };
 
   _onLoadingFinish = (event: Event) => {
-    var {onLoad, onLoadEnd} = this.props;
+    const {onLoad, onLoadEnd} = this.props;
     onLoad && onLoad(event);
     onLoadEnd && onLoadEnd(event);
     this.setState({
@@ -625,14 +644,14 @@ class WebView extends React.Component {
   };
 
   _onMessage = (event: Event) => {
-    var {onMessage} = this.props;
+    const {onMessage} = this.props;
     onMessage && onMessage(event);
   }
 }
 
-var RCTWebView = requireNativeComponent('RCTWebView', WebView, WebView.extraNativeComponentConfig);
+const RCTWebView = requireNativeComponent('RCTWebView', WebView, WebView.extraNativeComponentConfig);
 
-var styles = StyleSheet.create({
+const styles = StyleSheet.create({
   container: {
     flex: 1,
   },

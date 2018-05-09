@@ -32,6 +32,8 @@ class ExecutorDelegate {
     JSExecutor& executor, unsigned int moduleId, unsigned int methodId, folly::dynamic&& args) = 0;
 };
 
+using NativeExtensionsProvider = std::function<folly::dynamic(const std::string&)>;
+
 class JSExecutorFactory {
 public:
   virtual std::unique_ptr<JSExecutor> createJSExecutor(
@@ -75,8 +77,17 @@ public:
 
   virtual void setGlobalVariable(std::string propName,
                                  std::unique_ptr<const JSBigString> jsonValue) = 0;
+
   virtual void* getJavaScriptContext() {
     return nullptr;
+  }
+
+  /**
+   * Returns whether or not the underlying executor supports debugging via the
+   * Chrome remote debugging protocol.
+   */
+  virtual bool isInspectable() {
+    return false;
   }
 
   /**
@@ -90,6 +101,10 @@ public:
 
   virtual void destroy() {}
   virtual ~JSExecutor() {}
+
+  static std::string getSyntheticBundlePath(
+      uint32_t bundleId,
+      const std::string& bundlePath);
 };
 
 } }
