@@ -20,7 +20,9 @@ import javax.annotation.Nullable;
 import okhttp3.ConnectionSpec;
 import okhttp3.OkHttpClient;
 import okhttp3.TlsVersion;
-
+import javax.net.ssl.HostnameVerifier;
+import javax.net.ssl.SSLSocketFactory;
+import javax.net.ssl.SSLSession;
 /**
  * Helper class that provides the same OkHttpClient instance that will be used for all networking
  * requests.
@@ -32,12 +34,15 @@ public class OkHttpClientProvider {
 
   // User-provided OkHttpClient factory
   private static @Nullable OkHttpClientFactory sFactory;
-
+  private static SSLSocketFactory sslSocketFactory;
   public static void setOkHttpClientFactory(OkHttpClientFactory factory) {
     sFactory = factory;
   }
 
   public static OkHttpClient getOkHttpClient() {
+    if (sslSocketFactory == null) {
+      sslSocketFactory = HTTPSTrustManager.allowAllSSLSocketFactory();
+    }
     if (sClient == null) {
       sClient = createClient();
     }
@@ -58,12 +63,22 @@ public class OkHttpClientProvider {
   }
 
   public static OkHttpClient.Builder createClientBuilder() {
+    if (sslSocketFactory == null) {
+      sslSocketFactory = HTTPSTrustManager.allowAllSSLSocketFactory();
+    }
     // No timeouts by default
     OkHttpClient.Builder client = new OkHttpClient.Builder()
       .connectTimeout(0, TimeUnit.MILLISECONDS)
       .readTimeout(0, TimeUnit.MILLISECONDS)
       .writeTimeout(0, TimeUnit.MILLISECONDS)
-      .cookieJar(new ReactCookieJarContainer());
+      .cookieJar(new ReactCookieJarContainer())
+      .hostnameVerifier(new HostnameVerifier() {
+        @Override
+        public boolean verify(String hostname, SSLSession session) {
+          return true;
+        }
+      })
+      .sslSocketFactory(sslSocketFactory);
 
     return enableTls12OnPreLollipop(client);
   }
